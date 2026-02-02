@@ -1,110 +1,109 @@
-# AWS Trusted Advisor Tools
+# AWS Trusted Advisor Automation Tools
 
-## Overview
+[![AWS](https://img.shields.io/badge/AWS-Trusted%20Advisor-orange?logo=amazon-aws)](https://aws.amazon.com/premiumsupport/trustedadvisor/)
+[![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-green)](LICENSE)
+[![SAM](https://img.shields.io/badge/AWS-SAM-red?logo=amazon-aws)](https://aws.amazon.com/serverless/sam/)
 
-AWS Trusted Advisor provides real-time guidance to help users provision their resources following AWS best practices. This repository contains sample automation tools that respond to Trusted Advisor check results using Amazon EventBridge.
+> **Automate AWS cost optimization, security, and performance improvements using Trusted Advisor recommendations with EventBridge and Lambda.**
 
-## Architecture
+## 🏗️ Architecture
 
 ![Trusted Advisor Automation Architecture](images/ta-architecture.png)
 
-## AWS Best Practices Applied
+## ✨ Features
 
-All solutions in this repository follow AWS Well-Architected best practices:
+- 🔒 **Security Automation** - Auto-remediate exposed IAM keys, enforce password policies
+- 💰 **Cost Optimization** - Release unused Elastic IPs, stop idle RDS instances
+- 🛡️ **Data Protection** - Enable S3 versioning, configure lifecycle policies
+- 📊 **Observability** - CloudWatch Logs, Alarms, X-Ray tracing, Dead Letter Queues
+- ⚡ **Serverless** - Python 3.12, ARM64 (Graviton2), pay-per-use
 
-### Lambda Function Best Practices
-- **SDK Client Initialization**: Clients initialized outside handler for connection reuse
-- **Structured Logging**: JSON log format for easier filtering and analysis
-- **Environment Variables**: Configuration via environment variables, not hardcoded
-- **Input Validation**: All events validated before processing
-- **Idempotent Design**: Functions handle duplicate events gracefully
-- **Least Privilege IAM**: Minimal permissions required for each function
+## 📋 Prerequisites
 
-### Infrastructure Best Practices
-- **Modern Runtimes**: Python 3.12 (latest supported)
-- **ARM64 Architecture**: Cost-optimized Graviton2 processors
-- **Parameterized Templates**: Configurable via CloudFormation parameters
-- **Tag-based Exclusions**: Opt-out mechanism for resources
+- AWS Account with **Business Support+**, **Enterprise Support**, or **Unified Operations** plan
+- [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
+- Trusted Advisor events emit to EventBridge in **us-east-1 only**
 
-## Prerequisites
-
-- AWS Business Support+, Enterprise Support, or Unified Operations plan (required for Trusted Advisor EventBridge integration)
-- AWS SAM CLI for deployment
-- Trusted Advisor events are emitted to EventBridge in **us-east-1** only
-
-## Available Solutions
-
-| Solution | Description | Deployment |
-|----------|-------------|------------|
-| [ExposedAccessKeys](ExposedAccessKeys/) | Delete exposed IAM keys, lookup CloudTrail, notify security | CloudFormation, Terraform |
-| [LowUtilizationEC2Instances](LowUtilizationEC2Instances/) | Stop EC2 instances with low utilization | CloudFormation |
-| [HighUtilizationEC2Instances](HighUtilizationEC2Instances/) | Resize overutilized EC2 instances with approval | CloudFormation |
-| [UnderutilzedEBSVolumes](UnderutilzedEBSVolumes/) | Snapshot and delete idle EBS volumes | CloudFormation |
-| [UnassociatedElasticIPs](UnassociatedElasticIPs/) | Release unassociated Elastic IPs | SAM |
-| [AmazonEBSSnapshots](AmazonEBSSnapshots/) | Create snapshots for volumes without backups | CloudFormation |
-| [AmazonRDSIdleDBInstances](AmazonRDSIdleDBInstances/) | Stop or delete idle RDS instances | SAM |
-| [S3BucketVersioning](S3BucketVersioning/) | Enable S3 bucket versioning | SAM |
-| [S3IncompleteMPUAbort](S3IncompleteMPUAbort/) | Apply lifecycle rules for incomplete uploads | SAM |
-| [IAMPasswordPolicy](IAMPasswordPolicy/) | Set IAM password policy | SAM |
-| [TA-Responder](TA-Responder/) | Generic framework with Bedrock AI integration | CloudFormation |
-| [TA-Integrations](TA-Integrations/) | Slack webhook for cost alerts | CloudFormation |
-| [TA-WellArchitected](TA-WellArchitected/) | Well-Architected Framework integration | SAM |
-
-## Quick Start
-
-### Deploy with SAM CLI
+## 🚀 Quick Start
 
 ```bash
-cd <solution-directory>
-sam build
-sam deploy --guided
+# Clone repository
+git clone https://github.com/vanhoangkha/trusted-advisor-tools.git
+cd trusted-advisor-tools
+
+# Deploy a solution (example: Unassociated Elastic IPs)
+cd UnassociatedElasticIPs
+sam build && sam deploy --guided --region us-east-1
 ```
 
-### Deploy with CloudFormation
+## 📦 Available Solutions
 
-Use the "Launch Stack" buttons in each solution's README, or:
+| Solution | Description | Status |
+|----------|-------------|--------|
+| [UnassociatedElasticIPs](UnassociatedElasticIPs/) | Release unassociated Elastic IP addresses | ✅ Production |
+| [S3BucketVersioning](S3BucketVersioning/) | Enable S3 bucket versioning | ✅ Production |
+| [IAMPasswordPolicy](IAMPasswordPolicy/) | Enforce IAM password policy | ✅ Production |
+| [AmazonRDSIdleDBInstances](AmazonRDSIdleDBInstances/) | Stop/delete idle RDS instances | ✅ Production |
+| [S3IncompleteMPUAbort](S3IncompleteMPUAbort/) | Apply S3 lifecycle rules for incomplete uploads | ✅ Production |
+| [ExposedAccessKeys](ExposedAccessKeys/) | Delete exposed IAM keys, notify security | 🔧 CloudFormation |
+| [LowUtilizationEC2Instances](LowUtilizationEC2Instances/) | Stop low utilization EC2 instances | 🔧 CloudFormation |
+| [HighUtilizationEC2Instances](HighUtilizationEC2Instances/) | Resize overutilized EC2 with approval | 🔧 CloudFormation |
+| [TA-Responder](TA-Responder/) | Generic framework with Bedrock AI | 🔧 CloudFormation |
 
-```bash
-aws cloudformation deploy \
-  --template-file template.yaml \
-  --stack-name <stack-name> \
-  --capabilities CAPABILITY_IAM \
-  --region us-east-1
-```
+## 🛠️ AWS Best Practices Applied
 
-## EventBridge Event Pattern
+### Lambda Functions
+- ✅ SDK clients initialized outside handler
+- ✅ Structured JSON logging
+- ✅ Environment variables for configuration
+- ✅ Input validation & error handling
+- ✅ Idempotent design
+- ✅ Least privilege IAM
 
-All solutions respond to Trusted Advisor events with this pattern:
+### Infrastructure
+- ✅ Python 3.12 + ARM64 (Graviton2)
+- ✅ X-Ray distributed tracing
+- ✅ Dead Letter Queues (DLQ)
+- ✅ CloudWatch Alarms
+- ✅ Log retention policies
+- ✅ KMS encryption
+
+## 🔧 EventBridge Pattern
 
 ```json
 {
   "source": ["aws.trustedadvisor"],
   "detail-type": ["Trusted Advisor Check Item Refresh Notification"],
   "detail": {
-    "status": ["WARN", "ERROR"],
+    "status": ["WARN"],
     "check-name": ["<specific-check-name>"]
   }
 }
 ```
 
-## Security Considerations
+## 🔐 Security
 
-1. **Test in DryRun mode first** - Most solutions support DryRun mode
-2. **Use tag-based exclusions** - Protect critical resources from automation
-3. **Review IAM permissions** - Each solution uses least-privilege policies
-4. **Monitor CloudWatch Logs** - All functions emit structured logs
+1. **DryRun mode** enabled by default - test before applying changes
+2. **Tag-based exclusions** - protect critical resources
+3. **Scoped IAM permissions** - least privilege access
+4. **Encrypted queues** - KMS encryption for DLQs
 
-## Documentation References
+## 📚 Documentation
 
 - [Monitoring Trusted Advisor with EventBridge](https://docs.aws.amazon.com/awssupport/latest/user/cloudwatch-events-ta.html)
-- [Lambda Best Practices](https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html)
+- [AWS Lambda Best Practices](https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html)
 - [IAM Security Best Practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html)
 - [Trusted Advisor Check Reference](https://docs.aws.amazon.com/awssupport/latest/user/trusted-advisor-check-reference.html)
 
-## License
+## 🤝 Contributing
 
-Apache 2.0 License. See [LICENSE](LICENSE).
+Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-## Contributing
+## 📄 License
 
-See [CONTRIBUTING](CONTRIBUTING.md) for guidelines.
+This project is licensed under the Apache 2.0 License - see [LICENSE](LICENSE) file.
+
+---
+
+**Keywords**: AWS Trusted Advisor, Lambda automation, EventBridge, cost optimization, security automation, serverless, SAM, CloudFormation, Python, DevOps, FinOps, cloud governance
