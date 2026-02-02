@@ -4,6 +4,10 @@
 
 AWS Trusted Advisor provides real-time guidance to help users provision their resources following AWS best practices. This repository contains sample automation tools that respond to Trusted Advisor check results using Amazon EventBridge.
 
+## Architecture
+
+![Trusted Advisor Automation Architecture](images/ta-architecture.png)
+
 ## AWS Best Practices Applied
 
 All solutions in this repository follow AWS Well-Architected best practices:
