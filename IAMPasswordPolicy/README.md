@@ -26,8 +26,29 @@ If you havent already, [install AWS SAM](https://docs.aws.amazon.com/serverless-
 
 ```bash
 cd IAMPasswordPolicy
-sam build && sam deploy -g
+sam build && sam deploy --guided --region us-east-1
 ```
+
+### AWS Best Practices Applied
+- **Python 3.12** with ARM64 (Graviton2) for cost optimization
+- **X-Ray Tracing** enabled for distributed tracing
+- **Dead Letter Queue (DLQ)** for failed invocation handling
+- **CloudWatch Alarm** for error monitoring
+- **Structured JSON Logging** with configurable log levels
+- **Log Retention** set to 30 days
+- **Configurable Policy Values** via environment variables
+- **Idempotent Design** - only updates if policy is non-compliant
+
+### Parameters
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| MinPasswordLength | 14 | Minimum password length |
+| RequireSymbols | true | Require special characters |
+| RequireNumbers | true | Require numeric characters |
+| RequireUppercase | true | Require uppercase letters |
+| RequireLowercase | true | Require lowercase letters |
+| MaxPasswordAge | 90 | Days before password expires |
+| PasswordReusePrevention | 24 | Number of previous passwords to remember |
 
 #### Cloudformation - CLI
 ```bash

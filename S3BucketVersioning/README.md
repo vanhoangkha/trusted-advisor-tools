@@ -16,8 +16,26 @@ If you havent already, [install AWS SAM](https://docs.aws.amazon.com/serverless-
 
 ```bash
 cd S3BucketVersioning
-sam build && sam deploy -g
+sam build && sam deploy --guided --region us-east-1
 ```
+
+### AWS Best Practices Applied
+- **Python 3.12** with ARM64 (Graviton2) for cost optimization
+- **X-Ray Tracing** enabled for distributed tracing
+- **Dead Letter Queue (DLQ)** for failed invocation handling
+- **CloudWatch Alarm** for error monitoring
+- **Structured JSON Logging** with configurable log levels
+- **Log Retention** set to 30 days
+- **Scoped IAM Permissions** - least privilege access
+- **Graceful Error Handling** - handles missing/inaccessible buckets without crashing
+- **Tag-based Exclusion** - skip buckets tagged with `DisableVersioning`
+- **Idempotent Design** - safe to run multiple times
+
+### Parameters
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| ExcludeTag | DisableVersioning | Tag key to check for exclusion |
+| LogLevel | INFO | Logging level (DEBUG, INFO, WARN, ERROR) |
 
 #### Cloudformation - CLI
 ```bash

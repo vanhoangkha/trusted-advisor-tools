@@ -2,23 +2,52 @@
     "Version": "2012-10-17",
     "Statement": [
         {
-            "Sid": "Stmt1477516473539",
+            "Sid": "CloudWatchLogs",
+            "Effect": "Allow",
             "Action": [
                 "logs:CreateLogGroup",
                 "logs:CreateLogStream",
                 "logs:PutLogEvents"
             ],
-            "Effect": "Allow",
-            "Resource": "arn:aws:logs:*:*:*"
+            "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/TAEBSSnapshots*"
         },
         {
-            "Sid": "Stmt1477680111144",
-            "Action": [
-                "ec2:CreateSnapshot",
-                "ec2:DescribeTags"
-            ],
+            "Sid": "EC2DescribeTags",
             "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeTags",
+                "ec2:DescribeVolumes"
+            ],
             "Resource": "*"
+        },
+        {
+            "Sid": "EC2CreateSnapshot",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:CreateSnapshot"
+            ],
+            "Resource": [
+                "arn:aws:ec2:*:*:volume/*",
+                "arn:aws:ec2:*::snapshot/*"
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "ec2:ResourceTag/environment": "prod"
+                }
+            }
+        },
+        {
+            "Sid": "EC2TagSnapshot",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:CreateTags"
+            ],
+            "Resource": "arn:aws:ec2:*::snapshot/*",
+            "Condition": {
+                "StringEquals": {
+                    "ec2:CreateAction": "CreateSnapshot"
+                }
+            }
         }
     ]
 }

@@ -1,283 +1,247 @@
 AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Auto-resize high utilization EC2 instances with approval workflow.
+  
+  Security Improvements:
+  - Scoped IAM permissions to specific resources
+  - Separate roles for Lambda and SSM
+  - Python 3.12 runtime
+  - Structured logging
 
 Parameters: 
   ResizeAutomationApproverUserARN:
     Type: String
-    Description: Enter the Approver User ARN for the automation document.
+    Description: ARN of the IAM user/role that can approve resize operations
+    AllowedPattern: "arn:aws:iam::[0-9]{12}:(user|role)/.*"
+  
   ResizeAutomationApprovalDocument:
     Type: String
-    Description: Enter the Automated Document you have created on each region to execute resize with Approval (If you leave this blank template will only works on us-east-1).
+    Description: Custom SSM Automation Document name (leave blank to use built-in)
+    Default: ""
 
 Conditions:
-  ResizeAutomationApprovalDocumentCond: !Not [!Equals [!Ref ResizeAutomationApprovalDocument, "" ]]
+  UseCustomDocument: !Not [!Equals [!Ref ResizeAutomationApprovalDocument, ""]]
 
 Resources:
-  TAHighInstanceFunctionPermissionMock:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt TAHighInstanceFunction.Arn
-      Action: 'lambda:InvokeFunction'
-      Principal: events.amazonaws.com
-      SourceArn: !GetAtt TAHighUtilizationEventRuleMock.Arn
+  # Lambda Function
+  TAHighInstanceFunction: 
+    Type: AWS::Lambda::Function
+    Properties: 
+      FunctionName: TAHighUtilizationEC2Handler
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.12
+      Timeout: 300
+      MemorySize: 128
+      LoggingConfig:
+        LogFormat: JSON
+        ApplicationLogLevel: INFO
+      Environment: 
+        Variables:
+          ResizeAutoDocument: !If
+            - UseCustomDocument
+            - !Ref ResizeAutomationApprovalDocument
+            - !Ref AutoDocApprovalDocument
+      Code: 
+        ZipFile: |
+          import json
+          import logging
+          import os
+          import boto3
+          
+          logger = logging.getLogger()
+          logger.setLevel('INFO')
+          
+          INSTANCE_SIZES = {
+              "t2": ["nano","micro","small","medium","large","xlarge","2xlarge"],
+              "t3": ["nano","micro","small","medium","large","xlarge","2xlarge"],
+              "m5": ["large","xlarge","2xlarge","4xlarge","12xlarge","24xlarge"],
+              "m6i": ["large","xlarge","2xlarge","4xlarge","8xlarge","12xlarge","16xlarge","24xlarge","32xlarge"],
+              "c5": ["large","xlarge","2xlarge","4xlarge","9xlarge","18xlarge"],
+              "c6i": ["large","xlarge","2xlarge","4xlarge","8xlarge","12xlarge","16xlarge","24xlarge","32xlarge"],
+              "r5": ["large","xlarge","2xlarge","4xlarge","12xlarge","24xlarge"],
+              "r6i": ["large","xlarge","2xlarge","4xlarge","8xlarge","12xlarge","16xlarge","24xlarge","32xlarge"],
+          }
+          
+          def get_next_size(instance_type):
+              family, size = instance_type.split(".")
+              if family not in INSTANCE_SIZES:
+                  return None
+              sizes = INSTANCE_SIZES[family]
+              if size not in sizes:
+                  return None
+              idx = sizes.index(size)
+              if idx >= len(sizes) - 1:
+                  return None
+              return f"{family}.{sizes[idx + 1]}"
+          
+          def lambda_handler(event, context):
+              logger.info('Processing event', extra={'event': json.dumps(event)})
+              
+              resource_arn = event['detail']['resource_id']
+              region = resource_arn.split(':')[3]
+              instance_id = event['detail']['check-item-detail']['Instance ID']
+              
+              ec2 = boto3.client('ec2', region_name=region)
+              ssm = boto3.client('ssm', region_name=region)
+              
+              # Get current instance type
+              resp = ec2.describe_instances(InstanceIds=[instance_id])
+              current_type = resp['Reservations'][0]['Instances'][0]['InstanceType']
+              next_type = get_next_size(current_type)
+              
+              if not next_type:
+                  logger.warning('No larger instance type available', extra={
+                      'instance_id': instance_id,
+                      'current_type': current_type
+                  })
+                  return {'status': 'no_action', 'reason': 'max_size_reached'}
+              
+              # Start SSM automation with approval
+              execution = ssm.start_automation_execution(
+                  DocumentName=os.environ['ResizeAutoDocument'],
+                  Parameters={
+                      'InstanceId': [instance_id],
+                      'InstanceType': [next_type]
+                  }
+              )
+              
+              logger.info('Started resize automation', extra={
+                  'instance_id': instance_id,
+                  'from_type': current_type,
+                  'to_type': next_type,
+                  'execution_id': execution['AutomationExecutionId']
+              })
+              
+              return {'status': 'pending_approval', 'execution_id': execution['AutomationExecutionId']}
 
-  TAHighInstanceFunctionPermission:
+  # Lambda Execution Role - Least Privilege
+  LambdaExecutionRole: 
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: TAHighUtilEC2LambdaRole
+      AssumeRolePolicyDocument: 
+        Version: '2012-10-17'
+        Statement: 
+          - Effect: Allow
+            Principal: 
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies: 
+        - PolicyName: LambdaPolicy
+          PolicyDocument: 
+            Version: '2012-10-17'
+            Statement: 
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action: 
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/TAHighUtilizationEC2Handler:*'
+              - Sid: EC2Describe
+                Effect: Allow
+                Action: 
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                Resource: '*'
+              - Sid: SSMAutomation
+                Effect: Allow
+                Action: 
+                  - ssm:StartAutomationExecution
+                Resource: 
+                  - !Sub 'arn:aws:ssm:*:${AWS::AccountId}:automation-definition/${AutoDocApprovalDocument}:*'
+                  - !Sub 'arn:aws:ssm:*:${AWS::AccountId}:automation-definition/AWS-ResizeInstance:*'
+
+  # SSM Automation Role - Separate from Lambda
+  SSMAutomationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: TAHighUtilEC2SSMRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ssm.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SSMAutomationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: EC2Resize
+                Effect: Allow
+                Action:
+                  - ec2:StopInstances
+                  - ec2:StartInstances
+                  - ec2:ModifyInstanceAttribute
+                Resource: !Sub 'arn:aws:ec2:*:${AWS::AccountId}:instance/*'
+              - Sid: EC2Describe
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceStatus
+                Resource: '*'
+
+  # EventBridge Rules
+  TAHighUtilizationEventRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: Trigger on Trusted Advisor High Utilization EC2 check
+      EventPattern: 
+        source:
+          - aws.trustedadvisor
+        detail-type:
+          - Trusted Advisor Check Item Refresh Notification
+        detail:
+          status:
+            - WARN
+          check-name:
+            - High Utilization Amazon EC2 Instances
+      State: ENABLED
+      Targets: 
+        - Arn: !GetAtt TAHighInstanceFunction.Arn
+          Id: TAHighInstanceFunction
+
+  LambdaInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !GetAtt TAHighInstanceFunction.Arn
-      Action: 'lambda:InvokeFunction'
+      Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt TAHighUtilizationEventRule.Arn
 
-  TAHighInstanceFunction: 
-    Type: "AWS::Lambda::Function"
-    Properties: 
-      Handler: "index.lambda_handler"
-      Role: !GetAtt ExecutionRole.Arn
-      Environment: 
-        Variables:
-          ResizeAutoDocument:         
-            !If
-              - ResizeAutomationApprovalDocumentCond
-              - !Ref ResizeAutomationApprovalDocument
-              - !Ref AutoDocApprovalDocument
-      Code: 
-        ZipFile: |
-              import json
-              import boto3
-              import os
-
-              ## EC2 Instance Table to decide which instance type to resize
-              i_list = {
-                "t2":["nano","micro","small","medium","large","xlarge","2xlarge"],
-                "t3":["nano","micro","small","medium","large","xlarge","2xlarge"],
-                "m5d":["large","xlarge","2xlarge","4xlarge","12xlarge","24xlarge"],
-                "m5":["large","xlarge","2xlarge","4xlarge","12xlarge","24xlarge"],
-                "m4":["large","xlarge","2xlarge","4xlarge","10xlarge","16xlarge"],
-                "c5d":["large","xlarge","2xlarge","4xlarge","9xlarge","18xlarge"],
-                "c5":["large","xlarge","2xlarge","4xlarge","9xlarge","18xlarge"],
-                "c4":["large","xlarge","2xlarge","4xlarge","8xlarge"],
-                "f1":["2xlarge","16xlarge"],
-                "g3":["4xlarge","8xlarge","16xlarge"],
-                "g2":["2xlarge","8xlarge"],
-                "p2":["xlarge","8xlarge","16xlarge"],
-                "p3":["2xlarge","8xlarge","16xlarge"],
-                "r5d":["large","xlarge","2xlarge","4xlarge","12xlarge","24xlarge"],
-                "r5":["large","xlarge","2xlarge","4xlarge","12xlarge","24xlarge"],
-                "r4":["large","xlarge","2xlarge","4xlarge","8xlarge","16xlarge"],
-                "x1":["16xlarge","32xlarge"],
-                "x1e":["xlarge","2xlarge","4xlarge","8xlarge","16xlarge","32xlarge"],
-                "z1d":["large","xlarge","2xlarge","3xlarge","6xlarge","12xlarge"],
-                "d2":["xlarge","2xlarge","4xlarge","8xlarge"],
-                "i2":["xlarge","2xlarge","4xlarge","8xlarge"],
-                "h1":["2xlarge","4xlarge","8xlarge","16xlarge"],
-                "i3":["large","xlarge","2xlarge","4xlarge","8xlarge","16xlarge"]
-              }
-
-              ## Function to decide new EC2 instance type
-              ## This function will choose a higher instance type in the same family 
-              def getResize(IType):
-                  I = IType.split(".")
-                  Idx = i_list[I[0]].index(I[1])
-                  leng = len(i_list[I[0]]) - 1
-                  
-                  if Idx < leng:
-                      NIdx = Idx + 1
-                      RType = I[0] + "." + i_list[I[0]][NIdx]
-                  else:
-                      RType = "none"
-                  return(RType)
-
-              ## Function to find instance type from instance id.
-              def getIType(IID,ec2):
-                  resp = ec2.describe_instances(InstanceIds=[IID])
-                  RType = resp['Reservations'][0]['Instances'][0]['InstanceType']
-                  return(RType)
-
-              ## Lambda Handler Function
-              def lambda_handler(event, context):
-                  print(json.dumps(event))
-                  RARN = event['detail']['resource_id'].split(':')
-                  REGION = RARN[3]
-                  
-                  ssm = boto3.client('ssm', region_name=REGION)
-                  ec2 = boto3.client('ec2', region_name=REGION)
-                
-                # Find Instance ID, check the type and decise which is the next instance type.
-                  IID = event['detail']['check-item-detail']['Instance ID']
-                  IType = getIType(IID,ec2)
-                  RType = getResize(IType)
-                  
-                  # Execute Automation Document of ResizeAutoDocument Environment variable.
-                  # xecute Automation Document
-                  if RType != "none":
-                      x = ssm.start_automation_execution(
-                              DocumentName = os.environ['ResizeAutoDocument'],
-                              Parameters= { 
-                                  'InstanceId': [IID],
-                                  'InstanceType': [RType]
-                                }
-                            )
-                      print(json.dumps(x))
-                      print("Executing Resize")
-                  else:
-                      print("No Higher Instance Found, Please Review other Instance Family")
-                  return(event)
-      Runtime: "python3.6"
-      Timeout: "300"
-
-  TAHighUtilizationEventRuleMock: 
-    Type: "AWS::Events::Rule"
-    Properties: 
-      Description: "EventRule"
-      RoleArn: !GetAtt ExecutionRole.Arn
-      EventPattern: 
-            source:
-              - awsmock.trustedadvisor
-            detail-type:
-              - Trusted Advisor Check Item Refresh Notification
-            detail:
-              status:
-                - WARN
-              check-name:
-                - High Utilization Amazon EC2 Instances
-      Targets: 
-        -
-          Arn: !GetAtt TAHighInstanceFunction.Arn
-          Id: TAHighInstanceFunction
-      State: "ENABLED"
-
-  TAHighUtilizationEventRule: 
-    Type: "AWS::Events::Rule"
-    Properties: 
-      RoleArn: !GetAtt ExecutionRole.Arn
-      Description: "EventRule"
-      EventPattern: 
-            source:
-              - aws.trustedadvisor
-            detail-type:
-              - Trusted Advisor Check Item Refresh Notification
-            detail:
-              status:
-                - WARN
-              check-name:
-                - High Utilization Amazon EC2 Instances
-      Targets: 
-        -
-          Arn: !GetAtt TAHighInstanceFunction.Arn
-          Id: TAHighInstanceFunction.V1
-      State: "ENABLED"
-
-####################################################################################
-# Execution Role
-####################################################################################
-
-
-  ExecutionRole: 
-    Type: "AWS::IAM::Role"
-    Properties: 
-      AssumeRolePolicyDocument: 
-        Statement: 
-          - 
-            Effect: "Allow"
-            Principal: 
-              Service: 
-                - "events.amazonaws.com"
-                - "lambda.amazonaws.com"
-            Action: 
-              - "sts:AssumeRole"
-      Path: "/"
-      Policies: 
-        - 
-          PolicyName: "Policies"
-          PolicyDocument: 
-            Statement: 
-              - 
-                Effect: "Allow"
-                Action: 
-                  - "logs:CreateLogGroup"
-                  - "logs:CreateLogStream"
-                  - "logs:PutLogEvents"
-                Resource: "arn:aws:logs:*:*:*"
-              - 
-                Effect: "Allow"
-                Action: 
-                  - "sns:Publish"
-                Resource: "*"
-              - 
-                Effect: "Allow"
-                Action: 
-                  - "iam:PassRole"
-                  - "iam:CreateRole"
-                  - "iam:DeleteRolePolicy"
-                  - "iam:PutRolePolicy"
-                  - "iam:GetRole"
-                  - "iam:DeleteRole"
-                Resource: "*"
-              - 
-                Effect: "Allow"
-                Action: 
-                  - "ssm:StartAutomationExecution"
-                  - "ssm:StopAutomationExecution"
-                  - "ssm:GetAutomationExecution"
-                Resource: "*"
-              - 
-                Effect: "Allow"
-                Action: 
-                  - "ec2:DescribeInstances"
-                  - "ec2:DescribeInstanceStatus"
-                  - "ec2:StartInstances"
-                  - "ec2:ModifyInstanceAttribute"
-                  - "ec2:StopInstances"
-                Resource: "*"
-              - 
-                Effect: "Allow"
-                Action: 
-                  - "lambda:CreateFunction"
-                  - "lambda:InvokeFunction"
-                  - "lambda:AddPermission"
-                  - "lambda:DeleteFunction"
-                  - "lambda:GetFunction"
-                Resource: "*"
-              - 
-                Effect: "Allow"
-                Action: 
-                  - "cloudformation:CreateStack"
-                  - "cloudformation:DeleteStack"
-                  - "cloudformation:DescribeStacks"
-                Resource: "*"
-
+  # SSM Automation Document with Approval
   AutoDocApprovalDocument: 
-    Type: "AWS::SSM::Document"
+    Type: AWS::SSM::Document
     Properties:
+      Name: TAHighUtilEC2ResizeWithApproval
       DocumentType: Automation
       Content: 
-        description: Resize Instance with Approval
+        description: Resize EC2 Instance with Approval
         schemaVersion: '0.3'
-        assumeRole: "{{ AutomationAssumeRole }}"
+        assumeRole: !GetAtt SSMAutomationRole.Arn
         parameters:
           InstanceId:
             type: String
-            description: "(Required) EC2 Instance to restart"
+            description: EC2 Instance ID to resize
           InstanceType:
             type: String
-            description: "(Required) EC2 Instance Type"
-          AutomationAssumeRole:
-            default: "" 
-            description: "(Optional) The ARN of the role that allows Automation to perform the actions on your behalf."
-            type: String
+            description: Target EC2 Instance Type
         mainSteps:
           - name: Approve
             action: aws:approve
             onFailure: Abort
             inputs:
-              NotificationArn: !Ref SNSAutomation
-              Message: "You have an Instance Resize approval request."
+              NotificationArn: !Ref SNSApprovalTopic
+              Message: "Approval required to resize EC2 instance to larger type."
               MinRequiredApprovals: 1
               Approvers: 
                 - !Ref ResizeAutomationApproverUserARN
           - name: Resize
             action: aws:executeAutomation
-            maxAttempts: 10
+            maxAttempts: 3
             timeoutSeconds: 600
             onFailure: Abort
             inputs:
@@ -286,5 +250,17 @@ Resources:
                 InstanceId: "{{ InstanceId }}"
                 InstanceType: "{{ InstanceType }}"
 
-  SNSAutomation: 
+  # SNS Topic for Approvals
+  SNSApprovalTopic: 
     Type: AWS::SNS::Topic
+    Properties:
+      TopicName: TAHighUtilEC2ApprovalTopic
+      KmsMasterKeyId: alias/aws/sns  # Enable encryption
+
+Outputs:
+  FunctionArn:
+    Value: !GetAtt TAHighInstanceFunction.Arn
+  SSMDocumentName:
+    Value: !Ref AutoDocApprovalDocument
+  ApprovalTopicArn:
+    Value: !Ref SNSApprovalTopic

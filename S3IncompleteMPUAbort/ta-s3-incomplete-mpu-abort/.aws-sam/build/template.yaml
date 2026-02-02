@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'S3 Incomplete Multipart Upload Abort - Apply lifecycle rules.
+
+  Security Improvements: - Scoped cross-account role assumption - Input validation
+  - Structured logging
+
+  '
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures:
+    - arm64
+    Timeout: 60
+    MemorySize: 128
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+Parameters:
+  CrossAccountRoleName:
+    Type: String
+    Default: CrossAccountS3AccessRole
+    Description: Name of the IAM role to assume in target accounts
+Resources:
+  ApplyLifecycleFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TA-S3-ApplyLifecyclePolicy
+      CodeUri: ApplyLifecycleFunction
+      Handler: apply_lifecycle.app.lambda_handler
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn:
+          Fn::GetAtt:
+          - DLQ
+          - Arn
+      Environment:
+        Variables:
+          CROSS_ACCOUNT_ROLE_NAME:
+            Ref: CrossAccountRoleName
+      Policies:
+      - Version: '2012-10-17'
+        Statement:
+        - Sid: AssumeRole
+          Effect: Allow
+          Action:
+          - sts:AssumeRole
+          Resource:
+            Fn::Sub: arn:aws:iam::*:role/${CrossAccountRoleName}
+          Condition:
+            StringEquals:
+              sts:ExternalId:
+                Ref: AWS::AccountId
+      Events:
+        TrustedAdvisorEvent:
+          Type: CloudWatchEvent
+          Properties:
+            Pattern:
+              source:
+              - aws.trustedadvisor
+              detail-type:
+              - Trusted Advisor Check Item Refresh Notification
+              detail:
+                status:
+                - WARN
+                check-name:
+                - Amazon S3 Bucket Lifecycle Configuration
+            State: ENABLED
+    Metadata:
+      SamResourceId: ApplyLifecycleFunction
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/${ApplyLifecycleFunction}
+      RetentionInDays: 30
+  DLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: TAS3MPU-DLQ
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: TAS3MPU-Errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+      - Name: FunctionName
+        Value:
+          Ref: ApplyLifecycleFunction
+Outputs:
+  FunctionArn:
+    Value:
+      Fn::GetAtt:
+      - ApplyLifecycleFunction
+      - Arn
+  DLQUrl:
+    Value:
+      Ref: DLQ
+  AlarmArn:
+    Value:
+      Fn::GetAtt:
+      - ErrorAlarm
+      - Arn

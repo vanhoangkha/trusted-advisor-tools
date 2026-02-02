@@ -1,43 +1,124 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
+Description: >
+  Set IAM password policy based on Trusted Advisor checks.
+  
+  Security Features:
+  - Least privilege IAM
+  - Configurable policy parameters
+  - Structured JSON logging
+  - Dead Letter Queue
+  - CloudWatch alarm
 
 Globals:
   Function:
-    Timeout: 3
-    MemorySize: 128
-    Runtime: python3.11
     Architectures:
-        - arm64
+      - arm64
+    Timeout: 30
+    MemorySize: 128
+    Runtime: python3.12
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      SystemLogLevel: WARN
+
+Parameters:
+  MinPasswordLength:
+    Type: Number
+    Default: 14
+    MinValue: 8
+    MaxValue: 128
+    Description: Minimum password length (AWS recommends 14+)
+  
+  MaxPasswordAge:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 1095
+    Description: Maximum password age in days
+  
+  PasswordReusePrevention:
+    Type: Number
+    Default: 24
+    MinValue: 1
+    MaxValue: 24
+    Description: Number of previous passwords to prevent reuse
 
 Resources:
+  DLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: TAIAMPasswordPolicy-DLQ
+      MessageRetentionPeriod: 1209600
+      KmsMasterKeyId: alias/aws/sqs
+
   SetPasswordPolicyFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: set_password_policy/
+      FunctionName: TA-SetIAMPasswordPolicy
+      Description: Sets IAM password policy to meet security requirements
+      CodeUri: ./set_password_policy/
       Handler: app.lambda_handler
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt DLQ.Arn
+      Environment:
+        Variables:
+          MIN_PASSWORD_LENGTH: !Ref MinPasswordLength
+          MAX_PASSWORD_AGE: !Ref MaxPasswordAge
+          PASSWORD_REUSE_PREVENTION: !Ref PasswordReusePrevention
+          LOG_LEVEL: INFO
       Policies:
-        - AWSLambdaExecute
-        - Version: "2012-10-17"
+        - Version: '2012-10-17'
           Statement:
-            - Effect: Allow
+            - Sid: IAMPasswordPolicy
+              Effect: Allow
               Action:
-              - "iam:UpdateAccountPasswordPolicy"
-              - "iam:GetAccountPasswordPolicy"
-              Resource: "*"
+                - iam:GetAccountPasswordPolicy
+                - iam:UpdateAccountPasswordPolicy
+              Resource: '*'  # Account-level actions require *
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt DLQ.QueueName
       Events:
-        CloudWatchEvent:
+        TrustedAdvisorEvent:
           Type: CloudWatchEvent
           Properties:
             Pattern:
-              source: 
-                - "aws.trustedadvisor"
-              detail-type: 
-                - "Trusted Advisor Check Item Refresh Notification"
-              detail: 
-                status: 
-                  - "WARN"
-                  - "ERROR"
+              source:
+                - aws.trustedadvisor
+              detail-type:
+                - Trusted Advisor Check Item Refresh Notification
+              detail:
+                status:
+                  - WARN
                 check-name:
-                  - "IAM Password Policy"
-            State: "ENABLED"
+                  - IAM Password Policy
+            State: ENABLED
 
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: TAIAMPasswordPolicy-Errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SetPasswordPolicyFunction
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${SetPasswordPolicyFunction}'
+      RetentionInDays: 90
+
+Outputs:
+  FunctionArn:
+    Value: !GetAtt SetPasswordPolicyFunction.Arn
+  DLQUrl:
+    Value: !Ref DLQ

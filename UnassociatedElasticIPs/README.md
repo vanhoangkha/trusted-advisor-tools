@@ -22,8 +22,28 @@ If you havent already, [install AWS SAM](https://docs.aws.amazon.com/serverless-
 
 ```bash
 cd UnassociatedElasticIPs
-sam build && sam deploy -g
+sam build && sam deploy --guided --region us-east-1
 ```
+
+### AWS Best Practices Applied
+- **Python 3.12** with ARM64 (Graviton2) for cost optimization
+- **X-Ray Tracing** enabled for distributed tracing
+- **Dead Letter Queue (DLQ)** for failed invocation handling
+- **CloudWatch Alarm** for error monitoring
+- **Structured JSON Logging** with configurable log levels
+- **Log Retention** set to 30 days
+- **Scoped IAM Permissions** - least privilege access
+- **Graceful Error Handling** - handles missing resources without crashing
+- **Tag-based Exclusion** - skip resources tagged with `TrustedAdvisorAutomate=false`
+- **DryRun Mode** enabled by default for safety
+
+### Parameters
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| DryRun | true | When true, simulates release without actually releasing |
+| ExcludeTagKey | TrustedAdvisorAutomate | Tag key to check for exclusion |
+| ExcludeTagValue | false | Tag value that triggers exclusion |
+| LogLevel | INFO | Logging level (DEBUG, INFO, WARN, ERROR) |
 
 #### Cloudformation - CLI
 ```bash

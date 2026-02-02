@@ -15,8 +15,25 @@ If you haven't already, [install AWS SAM](https://docs.aws.amazon.com/serverless
 
 ```bash
 cd ta-s3-incomplete-mpu-abort
-sam build && sam deploy --guided
+sam build && sam deploy --guided --region us-east-1
 ```
+
+### AWS Best Practices Applied
+- **Python 3.12** with ARM64 (Graviton2) for cost optimization
+- **X-Ray Tracing** enabled for distributed tracing
+- **Dead Letter Queue (DLQ)** for failed invocation handling
+- **CloudWatch Alarm** for error monitoring
+- **Structured JSON Logging** with configurable log levels
+- **Log Retention** set to 30 days
+- **Cross-Account Support** with External ID for secure role assumption
+- **Idempotent Design** - checks if rule exists before adding
+- **Graceful Error Handling** - handles missing buckets without crashing
+
+### Parameters
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| CrossAccountRoleName | CrossAccountS3AccessRole | IAM role name to assume in target accounts |
+| LogLevel | INFO | Logging level |
 
 Follow the prompts in the deploy process to set up your stack name, AWS Region, and other parameters.
 

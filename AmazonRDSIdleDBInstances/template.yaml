@@ -1,71 +1,155 @@
+AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
+Description: >
+  Remove idle RDS databases based on Trusted Advisor checks.
+  
+  Security Features:
+  - Scoped IAM to account's RDS instances
+  - Encrypted SNS topic
+  - Dead Letter Queue
+  - CloudWatch alarm
+  - Final snapshot before delete
 
 Globals:
   Function:
     Architectures:
-      - "arm64"
-    Runtime: python3.11
-
+      - arm64
+    Timeout: 60
+    MemorySize: 128
+    Runtime: python3.12
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      SystemLogLevel: WARN
 
 Parameters:
-  MINAGE: 
+  MinAge: 
     Type: Number
-    Default: "14"
-    Description: "Minimum time since last connection in days. Valid values are between 7-14"
-    MinValue: "7"
-    MaxValue: "14"
-    ConstraintDescription: "Must be between 7 and 14"
-  TERMINATIONMETHOD:
+    Default: 14
+    MinValue: 7
+    MaxValue: 14
+    Description: Minimum days since last connection (7-14)
+  
+  TerminationMethod:
     Type: String
-    Default: "delete"
-    Description: "Method to use to terminate idle RDS instances. Valid values are 'delete' or 'stop'"
-    AllowedValues:
-      - "delete"
-      - "stop"
-    ConstraintDescription: "Must be either 'delete' or 'stop'"
-  SNSTOPICARN:
+    Default: stop
+    AllowedValues: [delete, stop]
+    Description: Method to terminate idle instances
+  
+  NotificationEmail:
     Type: String
-    Description: "SNS Topic ARN to send notifications to. If left blank, this will be skipped"
-    Default: ""
-    ConstraintDescription: "Must be a valid SNS Topic ARN"
-    
+    Default: ''
+    Description: Email for notifications (optional)
 
+Conditions:
+  HasEmail: !Not [!Equals [!Ref NotificationEmail, '']]
 
 Resources:
-  RemoveIdleRDSDatabases:
+  DLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: TARDSIdle-DLQ
+      MessageRetentionPeriod: 1209600
+      KmsMasterKeyId: alias/aws/sqs
+
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasEmail
+    Properties:
+      TopicName: TARDSIdleNotifications
+      KmsMasterKeyId: alias/aws/sns
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasEmail
+    Properties:
+      TopicArn: !Ref NotificationTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  RemoveIdleRDSFunction:
     Type: AWS::Serverless::Function
     Properties:
+      FunctionName: TA-RemoveIdleRDS
+      Description: Stops or deletes idle RDS instances
       CodeUri: src/
       Handler: remove_idle_rds_databases.lambda_handler
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt DLQ.Arn
       Environment:
         Variables:
-          SNS_TOPIC_ARN: !Ref SNSTOPICARN
-          MIN_AGE: !Ref MINAGE
-          TERMINATION_METHOD: !Ref TERMINATIONMETHOD
+          SNS_TOPIC_ARN: !If [HasEmail, !Ref NotificationTopic, '']
+          MIN_AGE: !Ref MinAge
+          TERMINATION_METHOD: !Ref TerminationMethod
           ACCOUNT_ID: !Ref AWS::AccountId
+          LOG_LEVEL: INFO
       Policies:
-        - Statement:
-            - Sid: AllowRDSTermination
+        - Version: '2012-10-17'
+          Statement:
+            - Sid: RDSTermination
               Effect: Allow
               Action:
                 - rds:StopDBInstance
                 - rds:DeleteDBInstance
-              Resource: "*"
-            - Sid: AllowSNSPublish
+              Resource: !Sub 'arn:aws:rds:*:${AWS::AccountId}:db:*'
+            - Sid: RDSDescribe
               Effect: Allow
-              Action: sns:Publish
-              Resource: !Ref SNSTOPICARN
+              Action:
+                - rds:DescribeDBInstances
+              Resource: '*'
+            - !If
+              - HasEmail
+              - Sid: SNSPublish
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref NotificationTopic
+              - !Ref AWS::NoValue
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt DLQ.QueueName
       Events:
-        CloudWatchEvent:
+        TrustedAdvisorEvent:
           Type: CloudWatchEvent
           Properties:
             Pattern:
               source:
                 - aws.trustedadvisor
               detail-type:
-                - "Trusted Advisor Check Item Refresh Notification"
+                - Trusted Advisor Check Item Refresh Notification
               detail:
+                status:
+                  - WARN
                 check-name:
-                  - "Amazon RDS Idle DB Instances"
-                check-status:
-                  - "WARN"
+                  - Amazon RDS Idle DB Instances
+            State: ENABLED
+
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: TARDSIdle-Errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref RemoveIdleRDSFunction
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${RemoveIdleRDSFunction}'
+      RetentionInDays: 90
+
+Outputs:
+  FunctionArn:
+    Value: !GetAtt RemoveIdleRDSFunction.Arn
+  DLQUrl:
+    Value: !Ref DLQ
+  NotificationTopicArn:
+    Condition: HasEmail
+    Value: !Ref NotificationTopic

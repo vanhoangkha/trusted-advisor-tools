@@ -1,26 +1,57 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  ta-s3-incomplete-mpu-abort
-
-  SAM Template for ta-s3-incomplete-mpu-abort to apply lifecycle policies based on Trusted Advisor notifications
+  S3 Incomplete Multipart Upload Abort - Apply lifecycle rules.
+  
+  Security Improvements:
+  - Scoped cross-account role assumption
+  - Input validation
+  - Structured logging
 
 Globals:
   Function:
-    Timeout: 60  # Increased timeout to allow for cross-account operations
+    Runtime: python3.12
+    Architectures:
+      - arm64
+    Timeout: 60
     MemorySize: 128
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+
+Parameters:
+  CrossAccountRoleName:
+    Type: String
+    Default: CrossAccountS3AccessRole
+    Description: Name of the IAM role to assume in target accounts
 
 Resources:
   ApplyLifecycleFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: apply_lifecycle_function
+      FunctionName: TA-S3-ApplyLifecyclePolicy
+      CodeUri: ./apply_lifecycle_function/
       Handler: apply_lifecycle.app.lambda_handler
-      Runtime: python3.12
-      Architectures:
-        - arm64
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt DLQ.Arn
+      Environment:
+        Variables:
+          CROSS_ACCOUNT_ROLE_NAME: !Ref CrossAccountRoleName
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: AssumeRole
+              Effect: Allow
+              Action:
+                - sts:AssumeRole
+              Resource: !Sub 'arn:aws:iam::*:role/${CrossAccountRoleName}'
+              Condition:
+                StringEquals:
+                  sts:ExternalId: !Ref AWS::AccountId
       Events:
-        TrustedAdvisorNotification:
+        TrustedAdvisorEvent:
           Type: CloudWatchEvent
           Properties:
             Pattern:
@@ -33,19 +64,40 @@ Resources:
                   - WARN
                 check-name:
                   - Amazon S3 Bucket Lifecycle Configuration
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action:
-                - sts:AssumeRole
-              Resource: 'arn:aws:iam::*:role/CrossAccountS3AccessRole'
+            State: ENABLED
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ApplyLifecycleFunction}'
+      RetentionInDays: 30
+
+  DLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: TAS3MPU-DLQ
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: TAS3MPU-Errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApplyLifecycleFunction
 
 Outputs:
-  ApplyLifecycleFunction:
-    Description: "S3 incomplete Multi-part uploads fix (Apply Lifecycle Function) ARN"
+  FunctionArn:
     Value: !GetAtt ApplyLifecycleFunction.Arn
-  ApplyLifecycleFunctionIamRole:
-    Description: "Implicit IAM Role created for Apply Lifecycle function"
-    Value: !GetAtt ApplyLifecycleFunctionRole.Arn
+  DLQUrl:
+    Value: !Ref DLQ
+  AlarmArn:
+    Value: !GetAtt ErrorAlarm.Arn

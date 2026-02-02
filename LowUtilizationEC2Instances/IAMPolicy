@@ -2,23 +2,36 @@
     "Version": "2012-10-17",
     "Statement": [
         {
-            "Sid": "Stmt1477516473539",
+            "Sid": "CloudWatchLogs",
+            "Effect": "Allow",
             "Action": [
                 "logs:CreateLogGroup",
                 "logs:CreateLogStream",
                 "logs:PutLogEvents"
             ],
-            "Effect": "Allow",
-            "Resource": "arn:aws:logs:*:*:*"
+            "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/TALowUtilEC2*"
         },
         {
-            "Sid": "Stmt1477680111144",
-            "Action": [
-                "ec2:StopInstances",
-                "ec2:DescribeTags"
-            ],
+            "Sid": "EC2DescribeTags",
             "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeTags",
+                "ec2:DescribeInstances"
+            ],
             "Resource": "*"
+        },
+        {
+            "Sid": "EC2StopInstances",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:StopInstances"
+            ],
+            "Resource": "arn:aws:ec2:*:*:instance/*",
+            "Condition": {
+                "StringEquals": {
+                    "ec2:ResourceTag/environment": "dev"
+                }
+            }
         }
     ]
 }

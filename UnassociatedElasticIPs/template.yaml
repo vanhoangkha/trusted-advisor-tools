@@ -1,52 +1,129 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  unassociated-elastic-ips
+  Release unassociated Elastic IP addresses based on Trusted Advisor checks.
+  
+  Security Features:
+  - Least privilege IAM
+  - DryRun mode by default
+  - Tag-based exclusion
+  - Structured JSON logging
+  - Dead Letter Queue for failed invocations
 
-  Sample SAM Template for unassociated-elastic-ips
-
-# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
 Globals:
   Function:
     Architectures: 
       - arm64
-    Timeout: 3
+    Timeout: 30
     MemorySize: 128
-    Runtime: python3.10
+    Runtime: python3.12
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      SystemLogLevel: WARN
+
+Parameters:
+  DryRun:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Set to false to actually release Elastic IPs
+  
+  ExcludeTagKey:
+    Type: String
+    Default: 'TrustedAdvisorAutomate'
+    Description: Tag key to check for exclusion
+  
+  ExcludeTagValue:
+    Type: String
+    Default: 'false'
+    Description: Tag value that excludes the Elastic IP
 
 Resources:
+  # Dead Letter Queue
+  DLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: TAElasticIP-DLQ
+      MessageRetentionPeriod: 1209600  # 14 days
+      KmsMasterKeyId: alias/aws/sqs
 
   RemoveElasticIPFunction:
-    Type: "AWS::Serverless::Function"
+    Type: AWS::Serverless::Function
     Properties:
-      Description: Removes unassociated elastic IP unless the IP has the tag ""
+      FunctionName: TA-ReleaseUnassociatedElasticIP
+      Description: Releases unassociated Elastic IPs unless excluded by tag
       CodeUri: ./remove_elastic_IP/
       Handler: app.lambda_handler
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt DLQ.Arn
+      Environment:
+        Variables:
+          DRY_RUN: !Ref DryRun
+          EXCLUDE_TAG_KEY: !Ref ExcludeTagKey
+          EXCLUDE_TAG_VALUE: !Ref ExcludeTagValue
+          LOG_LEVEL: INFO
       Policies:
-        - AWSLambdaExecute
-        - Version: "2012-10-17"
+        - Version: '2012-10-17'
           Statement:
-            - Effect: Allow
+            - Sid: DescribeAddresses
+              Effect: Allow
               Action:
-              - "ec2:ReleaseAddress"
-              - "ec2:DescribeAddresses"
-              - "ec2:DescribeTags"
-              Resource: "*"
+                - ec2:DescribeAddresses
+                - ec2:DescribeTags
+              Resource: '*'
+            - Sid: ReleaseAddress
+              Effect: Allow
+              Action:
+                - ec2:ReleaseAddress
+              Resource: !Sub 'arn:aws:ec2:*:${AWS::AccountId}:elastic-ip/*'
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt DLQ.QueueName
       Events:
-        CloudWatchEvent:
+        TrustedAdvisorEvent:
           Type: CloudWatchEvent
           Properties:
             Pattern:
               source: 
-                - "aws.trustedadvisor"
+                - aws.trustedadvisor
               detail-type: 
-                - "Trusted Advisor Check Item Refresh Notification"
+                - Trusted Advisor Check Item Refresh Notification
               detail: 
                 status: 
-                  - "WARN"
+                  - WARN
                 check-name:
-                  - "Unassociated Elastic IP Addresses"
-            State: "ENABLED"
-      
+                  - Unassociated Elastic IP Addresses
+            State: ENABLED
 
+  # CloudWatch Alarm for errors
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: TAElasticIP-Errors
+      AlarmDescription: Alarm when Lambda function errors occur
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref RemoveElasticIPFunction
 
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${RemoveElasticIPFunction}'
+      RetentionInDays: 30
+
+Outputs:
+  FunctionArn:
+    Value: !GetAtt RemoveElasticIPFunction.Arn
+  DLQUrl:
+    Value: !Ref DLQ
+  AlarmArn:
+    Value: !GetAtt ErrorAlarm.Arn

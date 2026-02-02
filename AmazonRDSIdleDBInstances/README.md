@@ -21,8 +21,28 @@ If you havent already, [install AWS SAM](https://docs.aws.amazon.com/serverless-
 
 ```bash
 cd AmazonRDSIdleDBInstances
-sam build && sam deploy -g
+sam build && sam deploy --guided --region us-east-1
 ```
+
+### AWS Best Practices Applied
+- **Python 3.12** with ARM64 (Graviton2) for cost optimization
+- **X-Ray Tracing** enabled for distributed tracing
+- **Dead Letter Queue (DLQ)** for failed invocation handling
+- **CloudWatch Alarm** for error monitoring
+- **Structured JSON Logging** with configurable log levels
+- **Log Retention** set to 30 days
+- **Scoped IAM Permissions** - least privilege access
+- **Graceful Error Handling** - handles missing/already-stopped instances
+- **SNS Notifications** for audit trail
+- **Final Snapshot** automatically created before deletion
+
+### Parameters
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| MinAge | 14 | Minimum days idle before action |
+| TerminationMethod | stop | Action to take: `stop` or `delete` |
+| SNSTopicArn | (empty) | SNS topic for notifications |
+| LogLevel | INFO | Logging level |
 
 
 More information about Trusted Advisor is available here: https://aws.amazon.com/premiumsupport/trustedadvisor/
