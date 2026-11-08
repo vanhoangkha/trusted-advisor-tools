@@ -109,11 +109,11 @@ def _build_message(stats):
     lines = [
         '=== Trusted Advisor Summary ===',
         '',
-        f"🔴 Critical: {stats['critical']}",
-        f"🟡 Warnings: {stats['warnings']}",
-        f"🟢 OK: {stats['ok']}",
+        f"Critical: {stats['critical']}",
+        f"Warnings: {stats['warnings']}",
+        f"OK: {stats['ok']}",
         '',
-        f"💰 Estimated Monthly Savings: ${stats['estimated_savings']:.2f}",
+        f"Estimated Monthly Savings: ${stats['estimated_savings']:.2f}",
         ''
     ]
 

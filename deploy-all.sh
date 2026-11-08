@@ -13,11 +13,11 @@ echo "  Region: $REGION"
 echo "============================================"
 
 # Check prerequisites
-command -v sam >/dev/null 2>&1 || { echo "❌ SAM CLI required. Install: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html"; exit 1; }
-command -v aws >/dev/null 2>&1 || { echo "❌ AWS CLI required"; exit 1; }
+command -v sam >/dev/null 2>&1 || { echo "SAM CLI required. Install: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html"; exit 1; }
+command -v aws >/dev/null 2>&1 || { echo "AWS CLI required"; exit 1; }
 
 # Verify AWS credentials
-aws sts get-caller-identity >/dev/null 2>&1 || { echo "❌ AWS credentials not configured"; exit 1; }
+aws sts get-caller-identity >/dev/null 2>&1 || { echo "AWS credentials not configured"; exit 1; }
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 echo "Account: $ACCOUNT_ID"
 
@@ -38,7 +38,7 @@ deploy_sam() {
         --no-fail-on-empty-changeset \
         --resolve-s3
     cd - >/dev/null
-    echo "✅ $stack deployed"
+    echo "$stack deployed"
 }
 
 deploy_cfn() {
@@ -54,7 +54,7 @@ deploy_cfn() {
         --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
         --no-fail-on-empty-changeset \
         "$@"
-    echo "✅ $stack deployed"
+    echo "$stack deployed"
 }
 
 # 1. Unassociated Elastic IPs
@@ -92,7 +92,7 @@ deploy_cfn "HighUtilizationEC2Instances/ta-automation-highutil-ec2.yml" "TA-High
 
 echo ""
 echo "============================================"
-echo "  ✅ All deployments complete!"
+echo "  All deployments complete!"
 echo "============================================"
 echo ""
 echo "Deployed stacks:"
