@@ -68,7 +68,7 @@ Resources:
                   for s in summaries
               )
               
-              msg = f"🔴 Critical: {len(critical)} | 💰 Savings: ${savings:.2f}"
+              msg = f"Critical: {len(critical)} | Savings: ${savings:.2f}"
               if critical:
                   msg += "\n" + "\n".join(
                       f"• {checks[s['checkId']]['name']}" for s in critical[:10]
